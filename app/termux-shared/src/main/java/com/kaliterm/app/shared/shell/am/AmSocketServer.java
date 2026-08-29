@@ -7,7 +7,7 @@ import android.content.Context;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.kaliterm.app.am.Am;
+import com.termux.am.Am;
 import com.kaliterm.app.shared.R;
 import com.kaliterm.app.shared.android.PackageUtils;
 import com.kaliterm.app.shared.android.PermissionUtils;
