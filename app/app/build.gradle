@@ -1,163 +1,243 @@
-#!/usr/bin/env bash
-# kaliterm_all_in_one.sh
-# RODE ISSO NO TERMUX (ou NetHunter). Comando único:
-#   bash kaliterm_all_in_one.sh
-#
-# Ele faz TUDO sozinho: instala o necessário, baixa o Termux, troca nome/cores/
-# ícone/prompt para estilo Kali, e deixa pronto pra build na nuvem (GitHub Actions).
-# No final, só sobra 3 passos manuais (criar repositório no GitHub e enviar).
-set -euo pipefail
+plugins {
+    id "com.android.application"
+}
 
-APP_NAME="KaliTerm"
-PKG_OLD="com.termux"
-PKG_NEW="com.kaliterm.app"
-WORKDIR="$HOME/kaliterm-build"
-BG_COLOR="#0C0C0C"
-FG_COLOR="#00FF41"
+ext {
+    // The packageVariant defines the bootstrap variant that will be included in the app APK.
+    // This must be supported by com.kaliterm.app.shared.termux.TermuxBootstrap.PackageVariant or app will
+    // crash at startup.
+    // Bootstrap of a different variant must not be manually installed by the user after app installation
+    // by replacing $PREFIX since app code is dependant on the variant used to build the APK.
+    // Currently supported values are: [ "apt-android-7" "apt-android-5" ]
+    packageVariant = System.getenv("TERMUX_PACKAGE_VARIANT") ?: "apt-android-7" // Default: "apt-android-7"
+}
 
-echo "########################################"
-echo "# 1/6 - Instalando git..."
-echo "########################################"
-if command -v git >/dev/null 2>&1; then
-  echo "    git já está instalado."
-elif command -v apt >/dev/null 2>&1; then
-  # Estamos no chroot do Kali (ou Debian/Ubuntu)
-  (sudo apt update -y && sudo apt install -y git) 2>/dev/null || \
-    (apt update -y && apt install -y git)
-elif command -v pkg >/dev/null 2>&1; then
-  # Estamos no Termux puro
-  pkg install -y git
-else
-  echo "ERRO: não achei 'apt' nem 'pkg' nem 'git' já instalado. Ambiente não reconhecido."
-  exit 1
-fi
+android {
+    namespace "com.kaliterm.app"
 
-echo "########################################"
-echo "# 2/6 - Baixando código-fonte do Termux..."
-echo "########################################"
-rm -rf "$WORKDIR"
-mkdir -p "$WORKDIR"
-cd "$WORKDIR"
-git clone --depth=1 https://github.com/termux/termux-app.git app
-cd app
+    compileSdkVersion project.properties.compileSdkVersion.toInteger()
+    ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: project.properties.ndkVersion
+    def appVersionName = System.getenv("TERMUX_APP_VERSION_NAME") ?: ""
+    def apkVersionTag = System.getenv("TERMUX_APK_VERSION_TAG") ?: ""
+    def splitAPKsForDebugBuilds = System.getenv("TERMUX_SPLIT_APKS_FOR_DEBUG_BUILDS") ?: "1"
+    def splitAPKsForReleaseBuilds = System.getenv("TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS") ?: "0" // F-Droid does not support split APKs #1904
 
-echo "########################################"
-echo "# 3/6 - Trocando nome e identidade do app..."
-echo "########################################"
-find . -type d -path "*${PKG_OLD//./\/}*" | while read -r dir; do
-  newdir=$(echo "$dir" | sed "s#${PKG_OLD//./\/}#${PKG_NEW//./\/}#")
-  mkdir -p "$(dirname "$newdir")"
-  mv "$dir" "$newdir" 2>/dev/null || true
-done
-grep -rlZ "$PKG_OLD" --include=*.java --include=*.kt --include=*.xml --include=*.gradle --include=*.pro . 2>/dev/null \
-  | xargs -0 -r sed -i "s/${PKG_OLD//./\.}/${PKG_NEW}/g" || true
-find . -name "strings.xml" | xargs -r sed -i \
-  "s#<string name=\"application_name\">.*</string>#<string name=\"application_name\">${APP_NAME}</string>#"
+    dependencies {
+        implementation "androidx.annotation:annotation:1.9.0"
+        implementation "androidx.core:core:1.13.1"
+        implementation "androidx.drawerlayout:drawerlayout:1.2.0"
+        implementation "androidx.preference:preference:1.2.1"
+        implementation "androidx.viewpager:viewpager:1.0.0"
+        implementation "com.google.android.material:material:1.12.0"
+        implementation "com.google.guava:guava:24.1-jre"
+        implementation "io.noties.markwon:core:$markwonVersion"
+        implementation "io.noties.markwon:ext-strikethrough:$markwonVersion"
+        implementation "io.noties.markwon:linkify:$markwonVersion"
+        implementation "io.noties.markwon:recycler:$markwonVersion"
+        implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
 
-echo "########################################"
-echo "# 4/6 - Aplicando cores, prompt e ícone estilo Kali..."
-echo "########################################"
-COLORS_FILE=$(find . -path "*res/values/colors.xml" | head -n1)
-if [ -n "$COLORS_FILE" ]; then
-  sed -i "s#<color name=\"background\">.*</color>#<color name=\"background\">${BG_COLOR}</color>#" "$COLORS_FILE" || true
-  sed -i "s#<color name=\"foreground\">.*</color>#<color name=\"foreground\">${FG_COLOR}</color>#" "$COLORS_FILE" || true
-fi
+        implementation project(":terminal-view")
+        implementation project(":termux-shared")
+    }
 
-mkdir -p app/src/main/assets/termux-custom
-cat > app/src/main/assets/termux-custom/bashrc_append.sh <<'EOF'
-export PS1='\[\033[01;32m\]root@kali\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]# '
-EOF
+    defaultConfig {
+        minSdkVersion project.properties.minSdkVersion.toInteger()
+        targetSdkVersion project.properties.targetSdkVersion.toInteger()
+        versionCode 118
+        versionName "0.118.0"
 
-# Ícone embutido direto aqui dentro (não precisa de arquivo separado)
-mkdir -p app/src/main/ic_kaliterm
-cat > app/src/main/ic_kaliterm/icon.svg <<'EOF'
-<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <radialGradient id="bg" cx="50%" cy="40%" r="75%">
-      <stop offset="0%" stop-color="#101010"/>
-      <stop offset="100%" stop-color="#000000"/>
-    </radialGradient>
-    <linearGradient id="glow" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#00FF66"/>
-      <stop offset="100%" stop-color="#00B84D"/>
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
-  <rect x="8" y="8" width="496" height="496" rx="92" fill="none" stroke="#00FF66" stroke-opacity="0.35" stroke-width="4"/>
-  <path d="M120 180 L230 256 L120 332" fill="none" stroke="url(#glow)" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="260" y="312" width="140" height="30" rx="6" fill="url(#glow)"/>
-</svg>
-EOF
+        if (appVersionName) versionName = appVersionName
+        validateVersionName(versionName)
 
-echo "########################################"
-echo "# 5/6 - Preparando build automático na nuvem (GitHub Actions)..."
-echo "########################################"
-mkdir -p "$WORKDIR/.github/workflows"
-cat > "$WORKDIR/.github/workflows/build.yml" <<'EOF'
-name: Build KaliTerm APK
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch: {}
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: Instalar ImageMagick e gerar ícones
-        run: |
-          sudo apt-get update && sudo apt-get install -y imagemagick
-          ICON=app/app/src/main/ic_kaliterm/icon.svg
-          declare -A SIZES=( [mdpi]=48 [hdpi]=72 [xhdpi]=96 [xxhdpi]=144 [xxxhdpi]=192 )
-          for d in "${!SIZES[@]}"; do
-            mkdir -p "app/app/src/main/res/mipmap-$d"
-            convert -background none -resize "${SIZES[$d]}x${SIZES[$d]}" "$ICON" "app/app/src/main/res/mipmap-$d/ic_launcher.png"
-            convert -background none -resize "${SIZES[$d]}x${SIZES[$d]}" "$ICON" "app/app/src/main/res/mipmap-$d/ic_launcher_round.png"
-          done
-      - name: Build APK
-        working-directory: ./app
-        run: |
-          chmod +x ./gradlew
-          ./gradlew assembleDebug
-      - uses: actions/upload-artifact@v4
-        with:
-          name: KaliTerm-debug-apk
-          path: app/app/build/outputs/apk/debug/*.apk
-EOF
+        buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\"" // Used by TermuxApplication class
 
-echo "########################################"
-echo "# 6/6 - Preparando repositório Git local..."
-echo "########################################"
-cd "$WORKDIR"
-git init -b main
-git add -A
-git commit -m "KaliTerm: fork rebrandado do Termux com icone e cores Kali" >/dev/null
+        manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.kaliterm.app"
+        manifestPlaceholders.TERMUX_APP_NAME = "Termux"
+        manifestPlaceholders.TERMUX_API_APP_NAME = "Termux:API"
+        manifestPlaceholders.TERMUX_BOOT_APP_NAME = "Termux:Boot"
+        manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "Termux:Float"
+        manifestPlaceholders.TERMUX_STYLING_APP_NAME = "Termux:Styling"
+        manifestPlaceholders.TERMUX_TASKER_APP_NAME = "Termux:Tasker"
+        manifestPlaceholders.TERMUX_WIDGET_APP_NAME = "Termux:Widget"
 
-echo ""
-echo "=================================================================="
-echo "✅ TUDO PRONTO NO CELULAR. Faltam só 3 passos manuais (1 minuto):"
-echo ""
-echo "  PASSO 1: Abra github.com/new no navegador, crie um repositório"
-echo "           VAZIO chamado 'kaliterm' (sem README, sem licença)."
-echo ""
-echo "  PASSO 2: Gere um token em github.com/settings/tokens/new"
-echo "           (marque a opção 'repo'). Copie o token gerado."
-echo ""
-echo "  PASSO 3: Volte aqui no Termux e cole estes 3 comandos"
-echo "           (troque SEU_USUARIO pelo seu usuário do GitHub):"
-echo ""
-echo "  cd $WORKDIR"
-echo "  git remote add origin https://github.com/SEU_USUARIO/kaliterm.git"
-echo "  git push -u origin main"
-echo ""
-echo "  Quando pedir senha, cole o TOKEN (não sua senha do GitHub)."
-echo ""
-echo "Depois disso, vá na aba 'Actions' do repositório no navegador,"
-echo "espere ficar verde, entre no run > Artifacts > baixe o .apk"
-echo "e instale no celular. Pronto, com ícone e tudo."
-echo "=================================================================="
+        externalNativeBuild {
+            ndkBuild {
+                cFlags "-std=c11", "-Wall", "-Wextra", "-Werror", "-Os", "-fno-stack-protector", "-Wl,--gc-sections"
+            }
+        }
+
+        splits {
+            abi {
+                enable ((gradle.startParameter.taskNames.any { it.contains("Debug") } && splitAPKsForDebugBuilds == "1") ||
+                    (gradle.startParameter.taskNames.any { it.contains("Release") } && splitAPKsForReleaseBuilds == "1"))
+                reset ()
+                include 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
+                universalApk true
+            }
+        }
+    }
+
+    signingConfigs {
+        debug {
+            storeFile file('testkey_untrusted.jks')
+            keyAlias 'alias'
+            storePassword 'xrj45yWGLbsO7W0v'
+            keyPassword 'xrj45yWGLbsO7W0v'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources false // Reproducible builds
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        // Flag to enable support for the new language APIs
+        coreLibraryDesugaringEnabled true
+
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path "src/main/cpp/Android.mk"
+        }
+    }
+
+    lint {
+        disable 'ProtectedPermissions'
+    }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            if (variant.buildType.name == "debug") {
+                def abi = output.getFilter(com.android.build.OutputFile.ABI)
+                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "debug") + "_" + (abi ? abi : "universal") + ".apk")
+            } else if (variant.buildType.name == "release") {
+                def abi = output.getFilter(com.android.build.OutputFile.ABI)
+                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
+            }
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+}
+
+dependencies {
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.robolectric:robolectric:4.10"
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:1.1.5"
+}
+
+task versionName {
+    doLast {
+        print android.defaultConfig.versionName
+    }
+}
+
+def validateVersionName(String versionName) {
+    // https://semver.org/spec/v2.0.0.html#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
+    // ^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$
+    if (!java.util.regex.Pattern.matches("^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?\$", versionName))
+        throw new GradleException("The versionName '"  + versionName + "' is not a valid version as per semantic version '2.0.0' spec in the format 'major.minor.patch(-prerelease)(+buildmetadata)'. https://semver.org/spec/v2.0.0.html.")
+}
+
+def downloadBootstrap(String arch, String expectedChecksum, String version) {
+    def digest = java.security.MessageDigest.getInstance("SHA-256")
+
+    def localUrl = "src/main/cpp/bootstrap-" + arch + ".zip"
+    def file = new File(projectDir, localUrl)
+    if (file.exists()) {
+        def buffer = new byte[8192]
+        def input = new FileInputStream(file)
+        while (true) {
+            def readBytes = input.read(buffer)
+            if (readBytes < 0) break
+            digest.update(buffer, 0, readBytes)
+        }
+        def checksum = new BigInteger(1, digest.digest()).toString(16)
+        while (checksum.length() < 64) { checksum = "0" + checksum }
+        if (checksum == expectedChecksum) {
+            return
+        } else {
+            logger.quiet("Deleting old local file with wrong hash: " + localUrl + ": expected: " + expectedChecksum + ", actual: " + checksum)
+            file.delete()
+        }
+    }
+
+    def remoteUrl = "https://github.com/termux/termux-packages/releases/download/bootstrap-" + version + "/bootstrap-" + arch + ".zip"
+    logger.quiet("Downloading " + remoteUrl + " ...")
+
+    file.parentFile.mkdirs()
+    def out = new BufferedOutputStream(new FileOutputStream(file))
+
+    def connection = new URL(remoteUrl).openConnection()
+    connection.setInstanceFollowRedirects(true)
+    def digestStream = new java.security.DigestInputStream(connection.inputStream, digest)
+    out << digestStream
+    out.close()
+
+    def checksum = new BigInteger(1, digest.digest()).toString(16)
+    while (checksum.length() < 64) { checksum = "0" + checksum }
+    if (checksum != expectedChecksum) {
+        file.delete()
+        throw new GradleException("Wrong checksum for " + remoteUrl + ": expected: " + expectedChecksum + ", actual: " + checksum)
+    }
+}
+
+clean {
+    doLast {
+        def tree = fileTree(new File(projectDir, 'src/main/cpp'))
+        tree.include 'bootstrap-*.zip'
+        tree.each { it.delete() }
+    }
+}
+
+task downloadBootstraps() {
+    doLast {
+        def packageVariant = project.ext.packageVariant
+        if (packageVariant == "apt-android-7") {
+            def version = "2026.02.12-r1" + "%2B" + "apt.android-7"
+            downloadBootstrap("aarch64", "ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3", version)
+            downloadBootstrap("arm", "a38f4d3b2f735f83be2bf54eff463e86dc32a3e2f9f861c1557c4378d249c018", version)
+            downloadBootstrap("i686", "f5bc0b025b9f3b420b5fcaeefc064f888f5f22a0d6fd7090f4aac0c33eb3555b", version)
+            downloadBootstrap("x86_64", "b7fd0f2e3a4de534be3144f9f91acc768630fc463eaf134ab2e64c545e834f7a", version)
+        } else if (packageVariant == "apt-android-5") {
+            def version = "2022.04.28-r6" + "+" + packageVariant
+            downloadBootstrap("aarch64", "913609d439415c828c5640be1b0561467e539cb1c7080662decaaca2fb4820e7", version)
+            downloadBootstrap("arm", "26bfb45304c946170db69108e5eb6e3641aad751406ce106c80df80cad2eccf8", version)
+            downloadBootstrap("i686", "46dcfeb5eef67ba765498db9fe4c50dc4690805139aa0dd141a9d8ee0693cd27", version)
+            downloadBootstrap("x86_64", "615b590679ee6cd885b7fd2ff9473c845e920f9b422f790bb158c63fe42b8481", version)
+        } else {
+            throw new GradleException("Unsupported TERMUX_PACKAGE_VARIANT \"" + packageVariant + "\"")
+        }
+    }
+}
+
+afterEvaluate {
+    android.applicationVariants.all { variant ->
+        variant.javaCompileProvider.get().dependsOn(downloadBootstraps)
+    }
+}
